@@ -5,6 +5,8 @@ from botocore.exceptions import NoCredentialsError
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 import os
+import time
+from throttle import Throttle
 
 load_dotenv()
 
@@ -17,6 +19,14 @@ S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
 
 # Cloudflare Storage endpoint
 CLOUDFLARE_STORAGE_ENDPOINT = os.getenv('CLOUDFLARE_STORAGE_ENDPOINT')
+
+# Set the network speed limit in bits per second (200 Mbps)
+NETWORK_SPEED_LIMIT_MBPS = os.getenv('NETWORK_THROTTLING_SPEED')
+NETWORK_SPEED_LIMIT = NETWORK_SPEED_LIMIT_MBPS * 1024 * 1024 / 8
+
+# Set the download/upload speed limit in bits per second (200 Mbps)
+DOWNLOAD_UPLOAD_SPEED_LIMIT_MBPS = os.getenv('DOWNLOAD_UPLOAD_THROTTLING_SPEED')
+DOWNLOAD_UPLOAD_SPEED_LIMIT = DOWNLOAD_UPLOAD_SPEED_LIMIT_MBPS * 1024 * 1024 / 8
 
 def upload_to_s3(content, object_key):
     try:
@@ -50,14 +60,25 @@ if __name__ == "__main__":
     csv_file_name = 'file.csv'
     csv_file_path = f'./{csv_file_name}'
     links = read_csv_file(csv_file_path)
+    
+    # Initialize throttles for network and speed control
+    network_throttle = Throttle(bytes_per_second=NETWORK_SPEED_LIMIT)
+    speed_control_throttle = Throttle(bytes_per_second=DOWNLOAD_UPLOAD_SPEED_LIMIT)
 
     for index, url in enumerate(links, start=1):
         try:
-            binary_content, content_type = download_file(url)
-            file_name = urlparse(url).path.split("/")[-1]
-            object_key = f"{file_name}"
+            with network_throttle:
+                # Download file
+                binary_content, content_type = download_file(url)
+            
+            with speed_control_throttle:
+                # Extract file name from URL
+                file_name = urlparse(url).path.split("/")[-1]
 
-            # Upload content to S3
-            upload_to_s3(binary_content, object_key)
+                # Upload content to S3
+                upload_to_s3(binary_content, file_name)
+            
+            # ADDING A DELAY OF 1 SECONDS BETWEEN REQUESTS
+            time.sleep(1)
         except Exception as e:
             print(f"Failed to retrieve content from URL: {url}. Error: {e}")
